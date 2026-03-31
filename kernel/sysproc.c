@@ -107,3 +107,21 @@ sys_uptime(void)
   release(&tickslock);
   return xticks;
 }
+
+uint64
+sys_set_throttle(void)
+{
+  int active, idle;
+  argint(0, &active);
+  argint(1, &idle);
+
+  if(active < 0 || idle < 0 || active + idle <= 0)
+    return -1;
+
+  acquire(&throttle_lock);
+  active_ticks_limit = active;
+  idle_ticks_limit = idle;
+  release(&throttle_lock);
+
+  return 0;
+}
