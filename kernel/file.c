@@ -18,6 +18,29 @@ static char buffer[BUFFER_SIZE];
 static int buffer_used = 0;
 static struct spinlock buffer_lock;
 
+// Drain buffered console bytes to the UART. Does not sleep while holding buffer_lock.
+static void
+flush_console_buffer(void)
+{
+  int n;
+  char tmp[BUFFER_SIZE];
+
+  acquire(&buffer_lock);
+  n = buffer_used;
+  if(n > 0)
+    memmove(tmp, buffer, n);
+  buffer_used = 0;
+  release(&buffer_lock);
+
+  if(n > 0){
+    if(devsw[CONSOLE].write == 0)
+      panic("flush_console_buffer");
+    int w = devsw[CONSOLE].write(0, (uint64)tmp, n);
+    if(w != n)
+      panic("flush_console_buffer");
+  }
+}
+
 struct devsw devsw[NDEV];
 struct {
   struct spinlock lock;
@@ -82,6 +105,8 @@ fileclose(struct file *f)
   if(ff.type == FD_PIPE){
     pipeclose(ff.pipe, ff.writable);
   } else if(ff.type == FD_INODE || ff.type == FD_DEVICE){
+    if(ff.type == FD_DEVICE && ff.major == CONSOLE)
+      flush_console_buffer();
     begin_op();
     iput(ff.ip);
     end_op();
@@ -161,26 +186,30 @@ filewrite(struct file *f, uint64 addr, int n)
        // Only write to the buffer if the write size is less than the max buffer write size and the device is the console
       if (n < MAX_BUFFER_WRITE_SIZE && f->major == CONSOLE) {
         acquire(&buffer_lock);
-
-        if (buffer_used + n > BUFFER_SIZE){
-          // UPDATE: On overflow flush the buffer then add remaining data to the cleaned buffer
-          // when adding the buffer overflow logic remove the return 1 and retunr n instead
+        if(buffer_used + n > BUFFER_SIZE){
+          release(&buffer_lock);
+          flush_console_buffer();
+          acquire(&buffer_lock);
+        }
+        if(buffer_used + n > BUFFER_SIZE){
           release(&buffer_lock);
           return -1;
         }
 
-        int err =either_copyin(buffer + buffer_used, 1, addr, n);
-
-        if (err < 0){
+        int err = either_copyin(buffer + buffer_used, 1, addr, n);
+        if(err < 0){
           release(&buffer_lock);
           return -1;
-        }else{
-          buffer_used += n;
-          release(&buffer_lock);
-          return n;
         }
+        buffer_used += n;
+        release(&buffer_lock);
+        // Quick path: flush after each small write so the system stays usable until batch policy lands.
+        flush_console_buffer();
+        return n;
       }
 
+      if(f->major == CONSOLE)
+        flush_console_buffer();
       ret = devsw[f->major].write(1, addr, n);
     } else if(f->type == FD_INODE){
       // write a few blocks at a time to avoid exceeding
