@@ -437,6 +437,20 @@ scheduler(void)
     intr_on();
     intr_off();
 
+    // Duty-cycle throttling: if we are in the forced-idle phase, halt this
+    // CPU until the next timer interrupt advances the cycle.  We read the
+    // flag under tickslock so we see the value CPU 0 wrote in clockintr().
+    // No process lock is held here, so there is no deadlock risk.
+    // After wfi returns (on the next timer tick) we loop back to intr_on/off
+    // so the interrupt is dispatched and is_forced_idle is re-evaluated.
+    acquire(&tickslock);
+    int throttled = is_forced_idle;
+    release(&tickslock);
+    if(throttled){
+      asm volatile("wfi");
+      continue;
+    }
+
     int found = 0;
     for(p = proc; p < &proc[NPROC]; p++) {
       acquire(&p->lock);

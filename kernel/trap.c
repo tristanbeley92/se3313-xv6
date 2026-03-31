@@ -9,6 +9,16 @@
 struct spinlock tickslock;
 uint ticks;
 
+// --- Duty-Cycle Throttling State ---
+// Each "cycle" is (throttle_active_ticks + throttle_idle_ticks) ticks long.
+// During the first throttle_active_ticks ticks the scheduler runs normally.
+// During the remaining throttle_idle_ticks ticks every CPU is forced to wfi.
+// Partner B's sys_set_throttle syscall updates active/idle under tickslock.
+int throttle_active_ticks = 70; // ticks per cycle where scheduling is allowed
+int throttle_idle_ticks   = 30; // ticks per cycle where CPUs are forced idle
+int throttle_cycle_ticks  = 0;  // position within the current cycle (CPU 0 only)
+int is_forced_idle        = 0;  // 1 = all CPUs must wfi, 0 = run normally
+
 extern char trampoline[], uservec[];
 
 // in kernelvec.S, calls kerneltrap().
@@ -168,6 +178,13 @@ clockintr()
     acquire(&tickslock);
     ticks++;
     wakeup(&ticks);
+    // Advance the duty-cycle counter and wrap it at the end of each cycle.
+    // Only CPU 0 drives this so all CPUs share one consistent cycle state.
+    throttle_cycle_ticks++;
+    if(throttle_cycle_ticks >= throttle_active_ticks + throttle_idle_ticks)
+      throttle_cycle_ticks = 0;
+    // Enter the idle phase once we have used up the active portion of the cycle.
+    is_forced_idle = (throttle_cycle_ticks >= throttle_active_ticks) ? 1 : 0;
     release(&tickslock);
   }
 
