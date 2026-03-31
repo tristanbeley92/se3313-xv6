@@ -143,15 +143,11 @@ void            trapinithart(void);
 extern struct spinlock tickslock;
 void            prepare_return(void);
 // duty-cycle throttling globals (written by sys_set_throttle, read by scheduler)
-extern int      throttle_active_ticks;
-extern int      throttle_idle_ticks;
-extern int      throttle_cycle_ticks;
-extern int      is_forced_idle;
-
-// throttle state (defined by Partner A in proc.c or trap.c)
-extern int            active_ticks_limit;
-extern int            idle_ticks_limit;
 extern struct spinlock throttle_lock;
+extern int      active_ticks_limit;
+extern int      idle_ticks_limit;
+extern int      throttle_cycle_ticks;
+extern volatile int is_forced_idle;
 
 // uart.c
 void            uartinit(void);
